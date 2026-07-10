@@ -1,0 +1,31 @@
+ARG AIRFLOW_VERSION=2.4.1
+FROM apache/airflow:${AIRFLOW_VERSION}
+
+ARG AIRFLOW_VERSION
+
+USER root
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openjdk-11-jre-headless \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+USER airflow
+
+RUN pip install --no-cache-dir \
+    apache-airflow-providers-postgres \
+    apache-airflow-providers-amazon \
+    --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")').txt"
+
+RUN pip uninstall --yes apache-airflow-providers-microsoft-azure
+
+RUN pip install --no-cache-dir py4j==0.10.9.5 \
+    && pip install --no-cache-dir --no-deps pyspark==3.2.3
+
+USER root
+
+RUN rm -rf \
+    /home/airflow/.local/lib/python*/site-packages/airflow/providers/microsoft/azure \
+    /home/airflow/.local/lib/python*/site-packages/apache_airflow_providers_microsoft_azure-*.dist-info
+
+USER airflow

@@ -1,0 +1,172 @@
+---
+x-airflow-common: &airflow-common
+  image: ${AIRFLOW_IMAGE_NAME:-de-final-prj-airflow:2.4.1-pyspark3.2.3}
+  build:
+    context: .
+    dockerfile: Dockerfile.airflow
+    args:
+      AIRFLOW_VERSION: ${AIRFLOW_VERSION:-2.4.1}
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+    AIRFLOW__CORE__LOAD_DEFAULT_CONNECTIONS: "False"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow_user:airflow_pass@postgres:5432/airflow_db
+    AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow_user:airflow_pass@postgres:5432/airflow_db
+    AIRFLOW__CORE__FERNET_KEY: ""
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
+    AIRFLOW__WEBSERVER__SECRET_KEY: local_student_secret_key
+    PYSPARK_PYTHON: /usr/local/bin/python
+    SPARK_LOCAL_HOSTNAME: localhost
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+    - ./spark:/opt/airflow/spark
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: BuMPLjDgRLjtmuarWBsd
+      POSTGRES_DB: de
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d de"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        mkdir -p /sources/logs /sources/dags /sources/plugins /sources/spark
+        chown -R "${AIRFLOW_UID:-50000}:0" /sources/logs /sources/dags /sources/plugins /sources/spark
+        /entrypoint airflow db init
+        if ! /entrypoint airflow users list | grep -q "$${_AIRFLOW_WWW_USER_USERNAME:-airflow}"; then
+          /entrypoint airflow users create \
+            --username "$${_AIRFLOW_WWW_USER_USERNAME:-airflow}" \
+            --password "$${_AIRFLOW_WWW_USER_PASSWORD:-airflow}" \
+            --firstname Airflow \
+            --lastname Admin \
+            --role Admin \
+            --email airflow@example.com
+        fi
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+    user: "0:0"
+    volumes:
+      - .:/sources
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+      - ./spark:/opt/airflow/spark
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+
+  metabase:
+    image: metabase/metabase:v0.41.5
+    environment:
+      MB_JETTY_PORT: 8998
+      MB_DB_TYPE: postgres
+      MB_DB_DBNAME: metabase
+      MB_DB_PORT: 5432
+      MB_DB_USER: admin
+      MB_DB_PASS: BuMPLjDgRLjtmuarWBsd
+      MB_DB_HOST: postgres
+    ports:
+      - "8998:8998"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  greenplum:
+    image: andruche/greenplum:7
+    platform: linux/amd64
+    ports:
+      - "5433:5432"
+    volumes:
+      - greenplum-data:/home/gpadmin/data
+    healthcheck:
+      test: ["CMD-SHELL", "/usr/local/gpdb/bin/pg_isready -d postgres -h localhost -p 5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  greenplum-init:
+    image: andruche/greenplum:7
+    platform: linux/amd64
+    user: gpadmin
+    environment:
+      GREENPLUM_DE_DB: de
+      GREENPLUM_DE_USER: student
+      GREENPLUM_DE_PASSWORD: /RF7s4G4YDk1/aBjOptSdkgAFl78m/fI
+    entrypoint: /bin/bash
+    command:
+      - -lc
+      - |
+        until pg_isready -d postgres -h greenplum -p 5432; do
+          sleep 2
+        done
+
+        psql -h greenplum -d postgres -v ON_ERROR_STOP=1 \
+          -c "DO \$\$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$${GREENPLUM_DE_USER}') THEN EXECUTE format('ALTER ROLE %I WITH LOGIN PASSWORD %L', '$${GREENPLUM_DE_USER}', '$${GREENPLUM_DE_PASSWORD}'); ELSE EXECUTE format('CREATE ROLE %I WITH LOGIN PASSWORD %L', '$${GREENPLUM_DE_USER}', '$${GREENPLUM_DE_PASSWORD}'); END IF; END \$\$;"
+
+        if ! psql -h greenplum -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$${GREENPLUM_DE_DB}'" | grep -q 1; then
+          createdb -h greenplum -O "$${GREENPLUM_DE_USER}" "$${GREENPLUM_DE_DB}"
+        fi
+    depends_on:
+      greenplum:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  postgres-data:
+  greenplum-data:
