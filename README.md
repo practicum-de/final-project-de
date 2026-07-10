@@ -3,8 +3,9 @@
 В compose поднимаются:
 
 - PostgreSQL 13 для учебной базы `de`, базы Airflow `airflow_db` и базы Metabase `metabase`.
-- Airflow `2.4.1` с провайдерами `apache-airflow-providers-postgres` и `apache-airflow-providers-amazon`.
+- Airflow `2.4.1` с провайдерами `apache-airflow-providers-postgres`, `apache-airflow-providers-amazon` и `apache-airflow-providers-apache-spark`.
 - PySpark `3.2.3` внутри Airflow-образа, чтобы запускать Spark-код прямо из DAG/job Airflow.
+- Spark Kafka datasource `spark-sql-kafka-0-10_2.12:3.2.3` и PostgreSQL JDBC-драйвер для Spark JDBC-сценариев.
 - Metabase `v0.41.5`.
 - Greenplum `andruche/greenplum:7`.
 
@@ -91,6 +92,8 @@ from pyspark.sql import SparkSession
 
 spark = SparkSession.builder.master("local[*]").appName("airflow-pyspark-job").getOrCreate()
 ```
+
+В образ уже добавлены jar-файлы для чтения Kafka из Spark и JDBC-записи в PostgreSQL/Greenplum, поэтому для типовых сценариев не нужно указывать `--packages`.
 
 Python-скрипты для Spark можно класть в директорию `spark/`; внутри Airflow она доступна как `/opt/airflow/spark`.
 

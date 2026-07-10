@@ -2,11 +2,16 @@ ARG AIRFLOW_VERSION=2.4.1
 FROM apache/airflow:${AIRFLOW_VERSION}
 
 ARG AIRFLOW_VERSION
+ARG SPARK_VERSION=3.2.3
+ARG SCALA_BINARY_VERSION=2.12
+ARG KAFKA_CLIENTS_VERSION=2.8.1
+ARG COMMONS_POOL_VERSION=2.6.2
+ARG POSTGRES_JDBC_VERSION=42.5.4
 
 USER root
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends openjdk-11-jre-headless \
+    && apt-get install -y --no-install-recommends openjdk-11-jre-headless procps curl \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -19,10 +24,31 @@ RUN pip install --no-cache-dir \
 
 RUN pip uninstall --yes apache-airflow-providers-microsoft-azure
 
+RUN pip install --no-cache-dir --no-deps apache-airflow-providers-apache-spark==3.0.0
+
 RUN pip install --no-cache-dir py4j==0.10.9.5 \
     && pip install --no-cache-dir --no-deps pyspark==3.2.3
 
 USER root
+
+RUN set -eux; \
+    pyspark_jars_dir="$(find /home/airflow/.local/lib -path '*/site-packages/pyspark/jars' -type d | head -n 1)"; \
+    curl -fsSL "https://repo1.maven.org/maven2/org/apache/spark/spark-sql-kafka-0-10_${SCALA_BINARY_VERSION}/${SPARK_VERSION}/spark-sql-kafka-0-10_${SCALA_BINARY_VERSION}-${SPARK_VERSION}.jar" \
+      -o "${pyspark_jars_dir}/spark-sql-kafka-0-10_${SCALA_BINARY_VERSION}-${SPARK_VERSION}.jar"; \
+    curl -fsSL "https://repo1.maven.org/maven2/org/apache/spark/spark-token-provider-kafka-0-10_${SCALA_BINARY_VERSION}/${SPARK_VERSION}/spark-token-provider-kafka-0-10_${SCALA_BINARY_VERSION}-${SPARK_VERSION}.jar" \
+      -o "${pyspark_jars_dir}/spark-token-provider-kafka-0-10_${SCALA_BINARY_VERSION}-${SPARK_VERSION}.jar"; \
+    curl -fsSL "https://repo1.maven.org/maven2/org/apache/kafka/kafka-clients/${KAFKA_CLIENTS_VERSION}/kafka-clients-${KAFKA_CLIENTS_VERSION}.jar" \
+      -o "${pyspark_jars_dir}/kafka-clients-${KAFKA_CLIENTS_VERSION}.jar"; \
+    curl -fsSL "https://repo1.maven.org/maven2/org/apache/commons/commons-pool2/${COMMONS_POOL_VERSION}/commons-pool2-${COMMONS_POOL_VERSION}.jar" \
+      -o "${pyspark_jars_dir}/commons-pool2-${COMMONS_POOL_VERSION}.jar"; \
+    curl -fsSL "https://repo1.maven.org/maven2/org/postgresql/postgresql/${POSTGRES_JDBC_VERSION}/postgresql-${POSTGRES_JDBC_VERSION}.jar" \
+      -o "${pyspark_jars_dir}/postgresql-${POSTGRES_JDBC_VERSION}.jar"; \
+    chown airflow:0 \
+      "${pyspark_jars_dir}/spark-sql-kafka-0-10_${SCALA_BINARY_VERSION}-${SPARK_VERSION}.jar" \
+      "${pyspark_jars_dir}/spark-token-provider-kafka-0-10_${SCALA_BINARY_VERSION}-${SPARK_VERSION}.jar" \
+      "${pyspark_jars_dir}/kafka-clients-${KAFKA_CLIENTS_VERSION}.jar" \
+      "${pyspark_jars_dir}/commons-pool2-${COMMONS_POOL_VERSION}.jar" \
+      "${pyspark_jars_dir}/postgresql-${POSTGRES_JDBC_VERSION}.jar"
 
 RUN rm -rf \
     /home/airflow/.local/lib/python*/site-packages/airflow/providers/microsoft/azure \
